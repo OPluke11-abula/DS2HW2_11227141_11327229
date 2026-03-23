@@ -10,6 +10,22 @@
 
 using namespace std;
 
+struct Record {
+  int id;
+  int graduates;
+  Record(int i = 0, int g = 0) : id(i), graduates(g) {}
+};
+
+class TwoThreeTree {
+ private:
+  
+ public:
+  TwoThreeTree() {
+    heap.reserve(1000); //配置1000個Record空間
+    heap.emplace_back(0, 0);
+  }
+};
+
 bool loadFile(string filename);
 bool isInteger(const string &input);
 bool processCommand(int cmd);
