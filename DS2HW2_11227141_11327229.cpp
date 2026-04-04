@@ -249,6 +249,8 @@ public:
              << r.students << ", " << r.graduates << "\n";
       }
     }
+    cout << endl;
+    return;
   }
 };
 
@@ -417,6 +419,8 @@ public:
            << r.deptName << ", " << r.dayNight << ", " << r.level << ", "
            << r.students << ", " << r.graduates << "\n";
     }
+    cout << endl;
+    return;
   }
 };
 
