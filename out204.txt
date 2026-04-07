@@ -1,0 +1,73 @@
+* Data Structures and Algorithms *
+****** Balanced Search Tree ******
+* 0. QUIT                        *
+* 1. Build 23 tree               *
+* 2. Build AVL tree              *
+* 3. Top-K max search on 23 tree *
+* 4. Exact search on AVL tree    *
+**********************************
+Input a choice(0, 1, 2, 3, 4): 
+Input a file number ([0] Quit): Tree height = 7
+Number of nodes = 214
+1: [3] 國立清華大學, 數學系, D 日, B 學士, 243, 53
+
+
+* Data Structures and Algorithms *
+****** Balanced Search Tree ******
+* 0. QUIT                        *
+* 1. Build 23 tree               *
+* 2. Build AVL tree              *
+* 3. Top-K max search on 23 tree *
+* 4. Exact search on AVL tree    *
+**********************************
+Input a choice(0, 1, 2, 3, 4): Tree height = 9
+Number of nodes = 190
+1: [16] 國立臺灣大學, 物理學系, D 日, B 學士, 282, 68
+2: [51] 國立臺灣師範大學, 物理學系, D 日, B 學士, 283, 70
+3: [83] 國立中興大學, 物理學系, D 日, D 博士, 13, 0
+4: [84] 國立中興大學, 物理學系, D 日, M 碩士, 44, 15
+5: [85] 國立中興大學, 物理學系, D 日, B 學士, 227, 49
+6: [101] 國立交通大學, 物理學系, D 日, D 博士, 13, 2
+7: [102] 國立交通大學, 物理學系, D 日, M 碩士, 58, 19
+8: [220] 國立中山大學, 物理學系, D 日, D 博士, 36, 5
+9: [221] 國立中山大學, 物理學系, D 日, M 碩士, 71, 32
+10: [222] 國立中山大學, 物理學系, D 日, B 學士, 211, 49
+11: [322] 國立中正大學, 物理學系, D 日, D 博士, 12, 2
+12: [323] 國立中正大學, 物理學系, D 日, M 碩士, 56, 39
+13: [324] 國立中正大學, 物理學系, D 日, B 學士, 206, 48
+14: [446] 輔仁大學, 物理學系, D 日, M 碩士, 21, 8
+15: [447] 輔仁大學, 物理學系, D 日, B 學士, 400, 92
+
+
+* Data Structures and Algorithms *
+****** Balanced Search Tree ******
+* 0. QUIT                        *
+* 1. Build 23 tree               *
+* 2. Build AVL tree              *
+* 3. Top-K max search on 23 tree *
+* 4. Exact search on AVL tree    *
+**********************************
+Input a choice(0, 1, 2, 3, 4): 
+Enter a department name to search: Enter K in [1,3]: 
+* Data Structures and Algorithms *
+****** Balanced Search Tree ******
+* 0. QUIT                        *
+* 1. Build 23 tree               *
+* 2. Build AVL tree              *
+* 3. Top-K max search on 23 tree *
+* 4. Exact search on AVL tree    *
+**********************************
+Input a choice(0, 1, 2, 3, 4): 
+Enter K in [1,622]: 1: [482] 東吳大學, 法律學系, D 日, B 學士, 1296, 244
+2: [455] 輔仁大學, 織品服裝學系, D 日, B 學士, 1047, 229
+
+
+* Data Structures and Algorithms *
+****** Balanced Search Tree ******
+* 0. QUIT                        *
+* 1. Build 23 tree               *
+* 2. Build AVL tree              *
+* 3. Top-K max search on 23 tree *
+* 4. Exact search on AVL tree    *
+**********************************
+Input a choice(0, 1, 2, 3, 4): 

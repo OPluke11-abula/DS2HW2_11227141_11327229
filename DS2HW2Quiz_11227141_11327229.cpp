@@ -28,6 +28,14 @@ struct Record {
   Record() : seqId(0), students(0), teachers(0), graduates(0) {}
 };
 
+int compareDeptName(const string &lhs, const string &rhs) {
+  if (lhs < rhs)
+    return -1;
+  if (lhs > rhs)
+    return 1;
+  return 0;
+}
+
 struct Node {
   // 二維陣列，第一維是放相同的值，第二層是放不同的值，最多三個相同的值，最多三個不同的值
   vector<vector<Record>> keys;
@@ -223,14 +231,75 @@ private:
     return;
   }
 
+  // 遞迴刪除樹的所有節點，供解構子呼叫
+  void clearNode(Node *node) {
+    if (node == nullptr) return;
+    for (int i = 0; i <= node->key_count; i++) {
+      clearNode(node->children[i]);
+    }
+    delete node;
+  }
+
+  // 反向中序遍歷 2-3 樹，依【學生數】遞減順序收集各鍵值群組
+  // 2-3 樹的中序為遞增，反向遍歷即得遞減
+  void reverseInOrder(Node *node, vector<vector<Record>> &result) {
+    if (node == nullptr) return;
+    if (node->key_count == 2) {
+      // 3-node: 右子樹 → keys[1] → 中子樹 → keys[0] → 左子樹
+      reverseInOrder(node->children[2], result);
+      result.push_back(node->keys[1]);
+      reverseInOrder(node->children[1], result);
+      result.push_back(node->keys[0]);
+      reverseInOrder(node->children[0], result);
+    } else {
+      // 2-node: 右子樹 → keys[0] → 左子樹
+      reverseInOrder(node->children[1], result);
+      result.push_back(node->keys[0]);
+      reverseInOrder(node->children[0], result);
+    }
+  }
+
 public:
   TwoThreeTree() { root = nullptr; }
 
   void insert(vector<Record> records_list) {
-    for (int i = 0; i < records_list.size(); ++i) {
+    for (size_t i = 0; i < records_list.size(); ++i) {
       insertOne(records_list[i]);
     }
     return;
+  }
+
+  // 解構子：遞迴釋放所有節點的記憶體
+  ~TwoThreeTree() { clearNode(root); }
+
+  // 任務三：輸出【學生數】前 K 名最大值的紀錄
+  // 若同值超過 K 筆，同值的額外紀錄都包含；同值依【序號】遞增排序
+  void printTopK(int K) {
+    if (root == nullptr) return;
+    // 反向中序遍歷，取得各群組（學生數相同者為一群），已依遞減排列
+    vector<vector<Record>> groups;
+    reverseInOrder(root, groups);
+
+    // 逐一加入群組，直到累計筆數 >= K（同值群組必須完整加入）
+    vector<Record> output;
+    int count = 0;
+    for (auto &group : groups) {
+      if (count >= K) break;
+      // 將同值記錄依【序號】遞增排序
+      vector<Record> sg = group;
+      sort(sg.begin(), sg.end(),
+           [](const Record &a, const Record &b) { return a.seqId < b.seqId; });
+      for (auto &r : sg) output.push_back(r);
+      count += (int)sg.size();
+    }
+    // 輸出結果
+    int seq = 1;
+    for (const auto &r : output) {
+      cout << seq++ << ": [" << r.seqId << "] " << r.schoolName << ", "
+           << r.deptName << ", " << r.dayNight << ", " << r.level << ", "
+           << r.students << ", " << r.graduates << "\n";
+    }
+    cout << endl;
   }
 
   void printTargetNodes() {
@@ -337,9 +406,11 @@ private:
       return new AVLNode(record.deptName, record);
     }
 
-    if (record.deptName < node->deptName) {
+    int cmp = compareDeptName(record.deptName, node->deptName);
+
+    if (cmp < 0) {
       node->left = insertNode(node->left, record);
-    } else if (record.deptName > node->deptName) {
+    } else if (cmp > 0) {
       node->right = insertNode(node->right, record);
     } else {
       // 找到相同的科系名稱，將資料附加到同一個節點上，不增加新節點
@@ -391,6 +462,15 @@ private:
     return 1 + countNodes(node->left) + countNodes(node->right);
   }
 
+  // 在 AVL 樹中精確搜尋科系名稱，回傳節點指標；找不到回傳 nullptr
+  AVLNode *searchNode(AVLNode *node, const string &deptName) {
+    if (node == nullptr) return nullptr;
+    int cmp = compareDeptName(deptName, node->deptName);
+    if (cmp == 0) return node;
+    if (cmp < 0) return searchNode(node->left, deptName);
+    return searchNode(node->right, deptName);
+  }
+
 public:
   AVLTree() { root = nullptr; }
 
@@ -399,7 +479,7 @@ public:
 
   // 插入一整包的資料
   void insert(vector<Record> &records_list) {
-    for (int i = 0; i < records_list.size(); ++i) {
+    for (size_t i = 0; i < records_list.size(); ++i) {
       root = insertNode(root, records_list[i]);
     }
     return;
@@ -422,6 +502,47 @@ public:
     cout << endl;
     return;
   }
+
+  // 公開查詢介面：精確搜尋科系名稱，回傳節點指標；找不到回傳 nullptr
+  AVLNode *search(const string &deptName) {
+    return searchNode(root, deptName);
+  }
+
+  // 任務四：精確搜尋【科系名稱】後，輸出【學生數】前 K 名最大值的紀錄
+  // 若同值超過 K 筆，同值的額外紀錄都包含；同值依【序號】遞增排序
+  void searchAndPrintTopK(const string &deptName, int K) {
+    AVLNode *node = searchNode(root, deptName);
+    if (node == nullptr) {
+      cout << deptName << " is not found!\n";
+      return;
+    }
+    // 依【學生數】遞減、【序號】遞增排序
+    vector<Record> recs = node->records;
+    sort(recs.begin(), recs.end(), [](const Record &a, const Record &b) {
+      if (a.students != b.students) return a.students > b.students;
+      return a.seqId < b.seqId;
+    });
+    // 逐一加入同值群組，直到累計 >= K（同值群組必須完整加入）
+    vector<Record> output;
+    int count = 0;
+    size_t i = 0;
+    while (i < recs.size()) {
+      if (count >= K) break;
+      int cur = recs[i].students;
+      while (i < recs.size() && recs[i].students == cur) {
+        output.push_back(recs[i++]);
+        count++;
+      }
+    }
+    // 輸出結果
+    int seq = 1;
+    for (const auto &r : output) {
+      cout << seq++ << ": [" << r.seqId << "] " << r.schoolName << ", "
+           << r.deptName << ", " << r.dayNight << ", " << r.level << ", "
+           << r.students << ", " << r.graduates << "\n";
+    }
+    cout << endl;
+  }
 };
 
 bool loadFile(const string &filename, vector<Record> &records_list);
@@ -436,8 +557,10 @@ int main() {
          << "* 0. QUIT                        *\n"
          << "* 1. Build 23 tree               *\n"
          << "* 2. Build AVL tree              *\n"
+         << "* 3. Top-K max search on 23 tree *\n"
+         << "* 4. Exact search on AVL tree    *\n"
          << "**********************************\n"
-         << "Input a choice(0, 1, 2): ";
+         << "Input a choice(0, 1, 2, 3, 4): ";
 
     string command;
     getline(cin, command);
@@ -579,51 +702,107 @@ bool processCommand(int cmd) {
   string filename{};
   static vector<Record>
       records_list; // 靜態變數，儲存從檔案讀取的資料，跨指令保留
-  static bool isAVLTreeBuilt = false; // 靜態紀錄 AVL Tree 是否已經建立過
-  static AVLTree *avl_tree = nullptr; // 持久化儲存 AVL Tree 實例
+  static bool isAVLTreeBuilt = false;           // 靜態紀錄 AVL Tree 是否已建立
+  static AVLTree *avl_tree = nullptr;           // 持久化儲存 AVL Tree 實例
+  static bool is23TreeBuilt = false;            // 靜態紀錄 2-3 樹是否已建立
+  static TwoThreeTree *two_three_tree = nullptr; // 持久化儲存 2-3 樹實例
 
   if (cmd == 1) {
-    TwoThreeTree tree;
-    records_list.clear();      // 重新選擇 1 時，清空舊有資料
-    isAVLTreeBuilt = false;    // 資料即將更新，重設 AVL Tree 建立狀態
-    if (avl_tree != nullptr) { // 如果舊的 AVL 樹存在，則安全釋放記憶體
+    records_list.clear();   // 重新選擇 1 時，清空舊有資料
+    isAVLTreeBuilt = false; // 資料即將更新，重設 AVL Tree 建立狀態
+    is23TreeBuilt = false;  // 重設 2-3 樹建立狀態
+    if (avl_tree != nullptr) { // 如有舊的 AVL 樹則安全釋放記憶體
       delete avl_tree;
       avl_tree = nullptr;
+    }
+    if (two_three_tree != nullptr) { // 如有舊的 2-3 樹則安全釋放記憶體
+      delete two_three_tree;
+      two_three_tree = nullptr;
     }
 
     do {
       cout << "\nInput a file number ([0] Quit): ";
-
       getline(cin, filename);
-      if (!filename.empty() && filename.back() == '\r') // 防止空輸入造成越界
+      if (!filename.empty() && filename.back() == '\r') // 防止 \r 造成路徑錯誤
         filename.pop_back();
-
-      if (filename == "0") {
-        return true;
-      }
+      if (filename == "0") return true;
     } while (!loadFile(filename, records_list));
 
-    tree.insert(records_list);
-    tree.printTargetNodes();
+    // 建立 2-3 樹並輸出結果
+    two_three_tree = new TwoThreeTree();
+    two_three_tree->insert(records_list);
+    two_three_tree->printTargetNodes();
+    is23TreeBuilt = true;
     return true;
+
   } else if (cmd == 2) {
-    // 檢查是否已經讀取過檔案 (是否先執行過選項 1)
+    // 確認任務一已執行
     if (records_list.empty()) {
       cout << "### Choose 1 first. ###\n";
       return true;
     }
-
-    // 若尚未建立過 AVL 樹，則進行建立與輸出
+    // 若尚未建立過 AVL 樹，則建立並輸出
     if (!isAVLTreeBuilt) {
       avl_tree = new AVLTree();
       avl_tree->insert(records_list);
       avl_tree->printTargetNodes();
-      isAVLTreeBuilt = true; // 標記為已建立
+      isAVLTreeBuilt = true;
     } else {
-      // 若已經建立過，直接輸出提示訊息並印出原有樹資料
       cout << "### AVL tree has been built. ###\n";
       avl_tree->printTargetNodes();
     }
+    return true;
+
+  } else if (cmd == 3) {
+    // 任務三：2-3 樹 top-K 最大值搜尋
+    if (!is23TreeBuilt || two_three_tree == nullptr) {
+      cout << "### Choose 1 first. ###\n";
+      return true;
+    }
+    // 提示合理範圍，N 為資料總筆數
+    int N = (int)records_list.size();
+    cout << "\nEnter K in [1," << N << "]: ";
+    string kStr;
+    getline(cin, kStr);
+    if (!kStr.empty() && kStr.back() == '\r') kStr.pop_back();
+    // K 必須在合理範圍 [1,N] 內；超出範圍或非整數則靜默返回
+    if (!isInteger(kStr) || stoi(kStr) <= 0 || stoi(kStr) > N) return true;
+    two_three_tree->printTopK(stoi(kStr));
+    return true;
+
+  } else if (cmd == 4) {
+    // 任務四：AVL 樹字串精確搜尋
+    // 先確認任務一已執行
+    if (!is23TreeBuilt) {
+      cout << "### Choose 1 first. ###\n";
+      return true;
+    }
+    // 再確認任務二已執行
+    if (!isAVLTreeBuilt || avl_tree == nullptr) {
+      cout << "### Choose 2 first. ###\n";
+      return true;
+    }
+    // 輸入科系名稱
+    cout << "\nEnter a department name to search: ";
+    string deptName;
+    getline(cin, deptName);
+    if (!deptName.empty() && deptName.back() == '\r') deptName.pop_back();
+
+    // 精確搜尋
+    AVLNode *node = avl_tree->search(deptName);
+    if (node == nullptr) {
+      cout << deptName << " is not found!\n";
+      return true;
+    }
+    // 找到：提示 K 的合理範圍，M 為該科系的記錄總數
+    int M = (int)node->records.size();
+    cout << "Enter K in [1," << M << "]: ";
+    string kStr;
+    getline(cin, kStr);
+    if (!kStr.empty() && kStr.back() == '\r') kStr.pop_back();
+    // K 必須在合理範圍 [1,M] 內；超出範圍或非整數則靜默返回
+    if (!isInteger(kStr) || stoi(kStr) <= 0 || stoi(kStr) > M) return true;
+    avl_tree->searchAndPrintTopK(deptName, stoi(kStr));
     return true;
   }
 
