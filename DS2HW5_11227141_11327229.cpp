@@ -1,260 +1,404 @@
-// 11227141 鍾博竣 // 註解：第一位作者學號與姓名
-// 11327229 游啓揚 // 註解：第二位作者學號與姓名
-#include <algorithm> // 註解：引入標準算法庫，主要使用穩定排序演算法 stable_sort
-#include <chrono> // 註解：引入時間度量庫，用於高精度評估執行時間
-#include <cstdio> // 註解：引入 C 系統庫，調用 std::remove 及 std::rename 進行暫存檔生命週期管理
-#include <fstream> // 註解：引入檔案輸入輸出流，提供高效 binary file streams 的磁碟讀寫功能
-#include <iomanip> // 註解：引入輸入輸出操作器庫，用於自定義控制台的流格式
-#include <iostream> // 註解：引入標準輸入輸出流庫，與控制台進行系統級互動
-#include <sstream> // 註解：引入字串流庫，用於獨立格式化浮點數時間，不干擾 cout 的預設全域狀態
-#include <string> // 註解：引入字串庫，用於檔名組合與命令列輸入處理
-#include <vector> // 註解：引入向量容器庫，用於分批資料快取與記憶體緩衝區配置
-using namespace std; // 註解：使用標準命名空間，減少冗餘命名限定符
-#pragma pack(push, 1) // 註解：以 1 位元組對齊封裝資料結構，避免編譯器因對齊補零而偏離 24 位元組的硬性大小限制
-struct Record { // 註解：定義二進位資料實體結構
-    char putID[10]; // 註解：發訊者學號資訊（10 位元組的字元陣列，內含原始位元組編碼）
-    char getID[10]; // 註解：收訊者學號資訊（10 位元組的字元陣列，內含原始位元組編碼）
-    float weight; // 註解：量化互動權重，4 位元組單精度浮點數，主要排序欄位
-}; // 註解：結束封裝資料實體結構
-#pragma pack(pop) // 註解：恢復編譯器的預設記憶體對齊設定
-struct IndexEntry { // 註解：定義記憶體中主索引（Primary Index）之節點結構
-    float weight; // 註解：鍵值（Key）：排序欄位 weight，代表該區間之代表權重
-    int recordOffset; // 註解：檔案位址（Offset）：該權重區段首筆紀錄在檔案中從 0 開始之序號
-}; // 註解：結束主索引節點結構體定義
-class ExternalSorter { // 註解：定義外部排序與索引管理器類別，落實物件導向封裝
-private: // 註解：私有成員區段，保護關鍵系統方法與變數
-    string fileNum; // 註解：當前操作的目標測試檔案流水編號字串
-    string getRunName(int pass, int runIndex) { // 註解：依據合併階段與子區塊生成暫存檔名
-        return "temp_pass_" + to_string(pass) + "_" + to_string(runIndex) + ".bin"; // 註解：建構臨時的二進位階段檔名
-    } // 註解：結束檔名建構私有方法
-    void mergeRuns(const string& file1, const string& file2, const string& outFile) { // 註解：對兩個已排序的局部二進位檔案進行雙路歸併
-        ifstream f1(file1, ios::binary); // 註解：以二進位模式開啟左側輸入二進位檔案
-        ifstream f2(file2, ios::binary); // 註解：以二進位模式開啟右側輸入二進位檔案
-        ofstream fOut(outFile, ios::binary); // 註解：以二進位模式開啟結果輸出檔案
-        vector<Record> buffer1(100); // 註解：配置 100 筆 Record 之輸入快取一，限制內存開銷
-        vector<Record> buffer2(100); // 註解：配置 100 筆 Record 之輸入快取二，限制內存開銷
-        vector<Record> bufferOut(100); // 註解：配置 100 筆 Record 之輸出快取，以批次寫入降低磁碟存取次數
-        int ptr1 = 0, count1 = 0; // 註解：快取一之當前讀取指針及實際載入量
-        int ptr2 = 0, count2 = 0; // 註解：快取二之當前讀取指針及實際載入量
-        int outCount = 0; // 註解：輸出快取之當前寫入計數器
-        auto getRecord1 = [&]() -> Record* { // 註解：分批磁碟載入 Lambda 函式（適用於第一個檔案輸入流）
-            if (ptr1 >= count1) { // 註解：當緩衝區資料被消耗完畢
-                f1.read(reinterpret_cast<char*>(buffer1.data()), 100 * sizeof(Record)); // 註解：自磁碟載入至多 100 筆新資料
-                count1 = f1.gcount() / sizeof(Record); // 註解：記錄本次成功獲取的實體資料長度
-                ptr1 = 0; // 註解：將快取讀取指針歸零
-            } // 註解：結束快取更新邏輯
-            if (count1 == 0) return nullptr; // 註解：代表檔案已達 EOF，回傳空指針
-            return &buffer1[ptr1]; // 註解：回傳快取中當前紀錄的指針
-        }; // 註解：結束載入函數 Lambda
-        auto getRecord2 = [&]() -> Record* { // 註解：分批磁碟載入 Lambda 函式（適用於第二個檔案輸入流）
-            if (ptr2 >= count2) { // 註解：當緩衝區資料被消耗完畢
-                f2.read(reinterpret_cast<char*>(buffer2.data()), 100 * sizeof(Record)); // 註解：自磁碟載入至多 100 筆新資料
-                count2 = f2.gcount() / sizeof(Record); // 註解：記錄本次成功獲取的實體資料長度
-                ptr2 = 0; // 註解：將快取讀取指針歸零
-            } // 註解：結束快取更新邏輯
-            if (count2 == 0) return nullptr; // 註解：代表檔案已達 EOF，回傳空指針
-            return &buffer2[ptr2]; // 註解：回傳快取中當前紀錄的指針
-        }; // 註解：結束載入函數 Lambda
-        auto writeRecord = [&](const Record& rec) { // 註解：輸出流批次寫入快取之控制 Lambda
-            bufferOut[outCount++] = rec; // 註解：將指定紀錄搬移至輸出快取並累加計數
-            if (outCount == 100) { // 註解：當輸出快取已滿 100 筆時
-                fOut.write(reinterpret_cast<const char*>(bufferOut.data()), 100 * sizeof(Record)); // 註解：進行一次性硬碟批次寫入
-                outCount = 0; // 註解：重置輸出寫入指針計數器
-            } // 註解：結束批次寫出邏輯
-        }; // 註解：結束輸出快取 Lambda
-        Record* r1 = getRecord1(); // 註解：讀取左側 Run 檔案之起始項目
-        Record* r2 = getRecord2(); // 註解：讀取右側 Run 檔案之起始項目
-        while (r1 != nullptr || r2 != nullptr) { // 註解：進行線性合併雙指針掃描
-            if (r1 != nullptr && r2 != nullptr) { // 註解：當兩側皆具備可用資料時進行大小比較
-                if (r1->weight > r2->weight) { // 註解：左側資料權重較大
-                    writeRecord(*r1); // 註解：寫入左側紀錄到輸出緩衝區
-                    ptr1++; // 註解：更新左側指針
-                    r1 = getRecord1(); // 註解：載入下一筆左側紀錄
-                } else if (r1->weight < r2->weight) { // 註解：右側資料權重較大
-                    writeRecord(*r2); // 註解：寫入右側紀錄到輸出緩衝區
-                    ptr2++; // 註解：更新右側指針
-                    r2 = getRecord2(); // 註解：載入下一筆右側紀錄
-                } else { // 註解：當兩側權重完全相等時，為保證 Stable 排序，必須優先寫入左側紀錄（即檔案中原本位置靠前的人）
-                    writeRecord(*r1); // 註解：寫入左側紀錄
-                    ptr1++; // 註解：更新左側指針
-                    r1 = getRecord1(); // 註解：載入下一筆左側紀錄
-                } // 註解：結束大小與穩定性比較
-            } else if (r1 != nullptr) { // 註解：當右側檔案已耗盡，僅剩左側檔案時
-                writeRecord(*r1); // 註解：依序寫出剩餘之左側紀錄
-                ptr1++; // 註解：更新左側快取讀取指標
-                r1 = getRecord1(); // 註解：獲取下一筆左側紀錄
-            } else { // 註解：當左側檔案已耗盡，僅剩右側檔案時
-                writeRecord(*r2); // 註解：依序寫出剩餘之右側紀錄
-                ptr2++; // 註解：更新右側快取讀取指標
-                r2 = getRecord2(); // 註解：獲取下一筆右側紀錄
-            } // 註解：結束雙通道資料狀態分支處理
-        } // 註解：結束線性合併迴圈
-        if (outCount > 0) { // 註解：若歸併結束後，輸出緩衝區有少於 100 筆之殘留資料
-            fOut.write(reinterpret_cast<const char*>(bufferOut.data()), outCount * sizeof(Record)); // 註解：沖刷緩衝區，寫入剩餘所有位元組
-        } // 註解：結束輸出快取沖刷邏輯
-        f1.close(); // 註解：釋放第一個輸入二進位檔案描述符
-        f2.close(); // 註解：釋放第二個輸入二進位檔案描述符
-        fOut.close(); // 註解：釋放寫入檔案描述符並完成寫入
-    } // 註解：結束 mergeRuns 實體方法
-public: // 註解：公開成員區段，向外部提供標準操作介面
-    ExternalSorter(const string& num) : fileNum(num) {} // 註解：建構子，配置待處理的測試檔編號
-    bool executeSort(double& tInternal, double& tExternal) { // 註解：外部排序控制器，管理初始 Run 分割及階梯式歸併
-        auto tStart = chrono::high_resolution_clock::now(); // 註解：擷取高精度系統計時起點，標記內部排序起始
-        string inName = "pairs" + fileNum + ".bin"; // 註解：組合對應目標二進位輸入檔名
-        ifstream inFile(inName, ios::binary); // 註解：以 binary 模式建立檔案唯讀流
-        if (!inFile.is_open()) return false; // 註解：檔案不存在時防呆直接中斷並回傳 false
-        int runIndex = 0; // 註解：歸併第 0 階生成的 Runs 個數計數器
-        vector<Record> memBuffer(300); // 註解：記憶體工作快取（大小固定為 300 筆 Record），完美滿足記憶體預算
-        while (true) { // 註解：分批載入並在 RAM 中進行 initial runs 排序
-            inFile.read(reinterpret_cast<char*>(memBuffer.data()), 300 * sizeof(Record)); // 註解：最大批次載入 300 筆資料
-            int countRead = inFile.gcount() / sizeof(Record); // 註解：取得此批次之實體紀錄數量
-            if (countRead == 0) break; // 註解：若檔案已完全載入完畢則結束迴圈
-            vector<Record> activeBlock(memBuffer.begin(), memBuffer.begin() + countRead); // 註解：僅對實際讀到的區間進行向量初始化
-            stable_sort(activeBlock.begin(), activeBlock.end(), [](const Record& a, const Record& b) { // 註解：進行穩定內部排序
-                return a.weight > b.weight; // 註解：第一關鍵字 weight 由大到小降序排列
-            }); // 註解：結束 Lambda 內建排序器
-            string runName = getRunName(0, runIndex); // 註解：建構當前 Pass-0 的分段暫存檔名
-            ofstream runFile(runName, ios::binary); // 註解：開啟暫存檔案寫入流
-            runFile.write(reinterpret_cast<const char*>(activeBlock.data()), countRead * sizeof(Record)); // 註解：將排好序的 300 筆資料塊寫出到二進位檔
-            runFile.close(); // 註解：關閉檔案以確保緩衝區寫入磁碟並釋放系統控制權
-            runIndex++; // 註解：累加初始 Run 編號
-        } // 註解：結束初始 Runs 劃分
-        inFile.close(); // 註解：釋放原始檔案資源
-        auto tInternalEnd = chrono::high_resolution_clock::now(); // 註解：取得內部排序完成之時間節點，作為外部歸併排序起點
-        cout << "\nThe internal sort is completed. Check the initial sorted runs! \n\n" // 註解：輸出內部排序完成提示
-             << "Now there are " << runIndex << " runs.\n\n"; // 註解：輸出首波 initial runs 總數
-        int currentPassRuns = runIndex; // 註解：變數儲存當前階段必須處理的 Runs 檔案數量
-        int pass = 0; // 註解：當前多路歸併遞迴深度深度
-        while (currentPassRuns > 1) { // 註解：開始外部合併，重疊歸併至僅剩一個 Run 檔案為止
-            int nextPassRuns = 0; // 註解：記錄新一輪合併後產生的新暫存檔個數
-            for (int i = 0; i < currentPassRuns; i += 2) { // 註解：以步長為 2 線性合併相鄰檔案
-                if (i + 1 < currentPassRuns) { // 註解：左右對稱存在，可以成對歸併
-                    string r1 = getRunName(pass, i); // 註解：前一階段左側暫存檔
-                    string r2 = getRunName(pass, i + 1); // 註解：前一階段右側暫存檔
-                    string rOut = getRunName(pass + 1, nextPassRuns); // 註解：新生成的合併暫存檔
-                    mergeRuns(r1, r2, rOut); // 註解：執行歸併核心函式
-                    std::remove(r1.c_str()); // 註解：清理前一階段之左側暫存檔，確保硬碟空間不膨脹
-                    std::remove(r2.c_str()); // 註解：清理前一階段之右側暫存檔，確保硬碟空間不膨脹
-                    nextPassRuns++; // 註解：累加新階段產生的 Runs 數
-                } else { // 註解：奇數個 Run 時剩餘的一個孤立暫存檔，直接遞補前進至下個階段
-                    string r1 = getRunName(pass, i); // 註解：前一階段殘留的單一暫存檔
-                    string rOut = getRunName(pass + 1, nextPassRuns); // 註解：移交至下一階段之對應暫存檔名
-                    std::rename(r1.c_str(), rOut.c_str()); // 註解：重新命名暫存檔案位置
-                    nextPassRuns++; // 註解：累加新階段產生的 Runs 數
-                } // 註解：結束奇偶檔案流分支處理
-            } // 註解：結束當前階層的所有 Run 對合併
-            pass++; // 註解：更新合併階數深度
-            currentPassRuns = nextPassRuns; // 註解：更新下一循環需處理的 Runs 數目
-            cout << "Now there are " << currentPassRuns << " runs.\n\n"; // 註解：依照 DEMO 格式，印出當前剩餘 runs 的數量
-        } // 註解：結束外部合併主邏輯
-        string finalTempRun = getRunName(pass, 0); // 註解：取得歸併至最後唯一的頂層 Run 二進位檔
-        string sortedOutName = "order" + fileNum + ".bin"; // 註解：建構題目要求之最終排序結果檔名
-        std::remove(sortedOutName.c_str()); // 註解：主動清除先前可能殘留的舊 order*.bin 檔案以防寫入干擾
-        std::rename(finalTempRun.c_str(), sortedOutName.c_str()); // 註解：移交命名為 order*.bin，結束外部排序
-        auto tExternalEnd = chrono::high_resolution_clock::now(); // 註解：擷取外部合併與重命名結束的時間戳
-        tInternal = chrono::duration<double, milli>(tInternalEnd - tStart).count(); // 註解：統計內部排序段所經歷的毫秒時間
-        tExternal = chrono::duration<double, milli>(tExternalEnd - tInternalEnd).count(); // 註解：統計外部歸併段所經歷的毫秒時間
-        return true; // 註解：成功處理完畢，回傳 true
-    } // 註解：結束 executeSort 實體方法
-    void buildPrimaryIndex() { // 註解：為已排序的 order*.bin 二進位檔案建立在記憶體中的主索引並印出
-        string sortedOutName = "order" + fileNum + ".bin"; // 註解：建構目標已排序檔案的名稱
-        ifstream f(sortedOutName, ios::binary); // 註解：建立目標已排序檔案之二進位唯讀流
-        if (!f.is_open()) return; // 註解：防呆驗證，若目標檔案不存在則不作任何處理
-        vector<IndexEntry> primaryIndex; // 註解：配置主索引暫存向量空間
-        Record rec; // 註解：配置用以讀取單筆資料的 Record 結構體工作變數
-        int recordIndex = 0; // 註解：追蹤當前掃描的 0-based 邏輯資料筆數序號
-        float lastWeight = -1.0f; // 註解：標記前一次讀到的權重資訊，用於邊界感應
-        while (f.read(reinterpret_cast<char*>(&rec), sizeof(Record))) { // 註解：批次向記憶體讀入單筆紀錄，極限節省 RAM 開銷
-            if (primaryIndex.empty() || rec.weight != lastWeight) { // 註解：若為首筆或是資料權重發生改變（代表進入新權重區間）
-                primaryIndex.push_back({rec.weight, recordIndex}); // 註解：紀錄該 unique 權重之起始邏輯行位置偏移
-                lastWeight = rec.weight; // 註解：同步更新上次讀取的權重
-            } // 註解：結束區段索引記錄邏輯
-            recordIndex++; // 註解：累加資料偏移序號
-        } // 註解：結束檔案遍歷
-        f.close(); // 註解：關閉目標檔案流，釋放描述符控制權
-        cout << "<Primary index>: (key, offset)\n"; // 註解：輸出任務二主索引格式裝飾行
-        for (size_t i = 0; i < primaryIndex.size(); ++i) { // 註解：依序走訪所有主索引條目
-            cout << "[" << i + 1 << "] (" << primaryIndex[i].weight << ", " << primaryIndex[i].recordOffset << ")\n"; // 註解：以 cout 預設精確度印出 (key, offset) 對應紀錄
-        } // 註解：結束主索引格式印出 loop
-    } // 註解：結束 buildPrimaryIndex 實體方法
-}; // 註解：結束 ExternalSorter 類別定義
-int main() { // 註解：程式進入點
-    while (true) { // 註解：最外層主控制迴圈，允許使用者連續分析多個測試數據集
-        cout << "* Data Structures and Algorithms *\n" // 註解：主選單第一列，顯示課程名稱
-             << "**********************************\n" // 註解：顯示邊框裝飾線
-             << "* 1. External merge sort on file *\n" // 註解：顯示功能一：外部排序
-             << "* 2: Construct the primary index *\n" // 註解：顯示功能二：主索引建置
-             << "**********************************\n" // 註解：顯示邊框裝飾線
-             << "*** The buffer size is 300\n"; // 註解：顯示記憶體緩衝區配置大小資訊列
-        string fileNum = ""; // 註解：宣告並初始化目標檔案名稱儲存變數
-        while (true) { // 註解：檔案防呆驗證輸入小迴圈
-            cout << "##################################\n" // 註解：Mission 1 提示裝飾列一
-                 << "Mission 1: External merge sort \n" // 註解：Mission 1 標題
-                 << "##################################\n\n" // 註解：Mission 1 提示裝飾列二及雙換行
-                 << "Input the file name: [0]Quit\n"; // 註解：提示使用者輸入檔案編號或 0 退出
-            if (!getline(cin, fileNum)) { // 註解：讀取一行輸入，若讀到 EOF
-                fileNum = "0"; // 註解：強制將命令設為 0 以觸發正常結束邏輯
-                break; // 註解：中斷輸入迴圈
-            } // 註解：結束輸入偵測判斷
-            if (!fileNum.empty() && fileNum.back() == '\r') { // 註解：過濾跨平台換行符影響
-                fileNum.pop_back(); // 註解：剔除尾部無效的 \r
-            } // 註解：結束換行符號過濾
-            if (fileNum == "0") { // 註解：使用者輸入 0 表示直接進入結束控制
-                break; // 註解：跳出輸入迴圈
-            } // 註解：結束 0 判斷
-            string testName = "pairs" + fileNum + ".bin"; // 註解：組裝完整的實體輸入二進位檔名
-            ifstream testFile(testName, ios::binary); // 註解：嘗試唯讀方式開啟該檔案
-            if (testFile.is_open()) { // 註解：若能成功開啟
-                testFile.close(); // 註解：立即關閉該測試流，確認檔案合法存在
-                break; // 註解：跳出防呆輸入迴圈，準備排序
-            } else { // 註解：若無法開啟檔案，代表輸入無效或檔案缺失
-                cout << "\npairs" << fileNum << ".bin does not exist!!!\n\n"; // 註解：輸出錯誤防呆警示，重新要求輸入
-            } // 註解：結束測試開啟狀態分支
-        } // 註解：結束輸入迴圈
-        if (fileNum == "0") { // 註解：若被要求終止操作（檔名編號為 0）
-            cout << "\n[0]Quit or [Any other key]continue?\n"; // 註解：進入結束詢問介面
-            string cont = ""; // 註解：宣告詢問回答字串
-            if (!getline(cin, cont)) { // 註解：若讀取回答時遭遇 EOF 則完全結束
-                break; // 註解：跳出最外層主控制迴圈，程式結束
-            } // 註解：結束回答讀取
-            if (!cont.empty() && cont.back() == '\r') { // 註解：移移除 carriage return 符號
-                cont.pop_back(); // 註解：剔除無效換行
-            } // 註解：結束 carriage return 過濾
-            if (cont == "0") { // 註解：若使用者回答 0，代表完全關閉程式
-                break; // 註解：跳出外層大迴圈，徹底結束執行
-            } // 註解：結束 0 確認退出
-            cout << "\n"; // 註解：印出換行符，保持格式跟 DEMO 的空行完美契合
-            continue; // 註解：回到外層大迴圈起始點，重新呈現主畫面
-        } // 註解：結束檔名為 0 處置
-        ExternalSorter sorter(fileNum); // 註解：實例化外部排序管理物件，將檔案流水號封裝進入 sorter 實體
-        double tInternal = 0.0, tExternal = 0.0; // 註解：宣告儲存內部與外部排序耗時的浮點變數
-        if (sorter.executeSort(tInternal, tExternal)) { // 註解：執行 sorter 的 executeSort 核心方法並驗證成功性
-            double tTotal = tInternal + tExternal; // 註解：精確累加內部排序與外部歸併之總耗時
-            stringstream ssInternal, ssExternal, ssTotal; // 註解：採用 stringstream 專屬流，避免 global cout 狀態被 persistent fixed 所干擾
-            ssInternal << fixed << setprecision(3) << tInternal; // 註解：將內部排序時間限制於小數點後三位
-            ssExternal << fixed << setprecision(3) << tExternal; // 註解：將外部合併時間限制於小數點後三位
-            ssTotal << fixed << setprecision(3) << tTotal; // 註解：將總執行時間限制於小數點後三位
-            cout << "The execution time ...\n" // 註解：輸出時間統計標題
-                 << "Internal Sort = " << ssInternal.str() << " ms\n" // 註解：印出內部排序時間字串
-                 << "External Sort = " << ssExternal.str() << " ms\n" // 註解：印出外部排序時間字串
-                 << "Total Execution Time = " << ssTotal.str() << " ms\n\n" // 註解：印出總排序時間字串
-                 << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n" // 註解：任務二裝飾界線一
-                 << "Mission 2: Build the primary index \n" // 註解：任務二標題
-                 << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n\n"; // 註解：任務二裝飾界線二及換行
-            sorter.buildPrimaryIndex(); // 註解：執行 sorter 物件的 buildPrimaryIndex 實體方法，快速分析已排序檔案並輸出主索引
-        } // 註解：結束排序執行與成果展示
-        cout << "\n[0]Quit or [Any other key]continue?\n"; // 註解：在全套流程完畢後，提示使用者是否要完全退出或繼續分析下一檔案
-        string action = ""; // 註解：宣告儲存使用者接續動作的字串變數
-        if (!getline(cin, action)) { // 註解：讀取使用者輸入，若讀到 EOF
-            break; // 註解：跳出最外層主控制迴圈，程式結束
-        } // 註解：結束接續指令讀取
-        if (!action.empty() && action.back() == '\r') { // 註解：移移除 carriage return 符號
-            action.pop_back(); // 註解：剔除無效換行
-        } // 註解：結束 carriage return 過濾
-        if (action == "0") { // 註解：若使用者輸入 0 代表結束執行
-            break; // 註解：跳出主程式控制迴圈，正常結束程式
-        } // 註解：結束 0 退出分支判斷
-        cout << "\n"; // 註解：印出一個換行以使畫面跟 DEMO 完全契合
-    } // 註解：結束外層大迴圈
-    return 0; // 註解：程式正常結束，回傳系統代碼 0
-} // 註解：結束 main 進入點函數
+/**
+ * @file DS2HW5_11227141_11327229.cpp
+ * @brief 資料結構與演算法 - 作業五：外部排序與主索引建置
+ * 
+ * 本程式主要實作以下兩大任務：
+ * 1. 任務一 (Mission 1)：外部歸併排序 (External Merge Sort)
+ *    - 將大於記憶體限制的二進位原始資料進行分批排序。
+ *    - 記憶體快取上限固定為 300 筆紀錄 (Record)。
+ *    - 實作高度穩定的 2-Way Merge (雙路歸併)，在權重相等時嚴格保留原始次序。
+ *    - 合併完成後，程式會自動清理磁碟中的所有臨時過渡暫存檔 (temp_pass_*)。
+ * 2. 任務二 (Mission 2)：建立主索引 (Primary Index)
+ *    - 讀取已排序的二進位檔案，建置記憶體中的主索引表。
+ *    - 針對各個不重複的浮點數權重鍵值，記錄其首筆紀錄的 0-based 資料序號偏移量。
+ * 
+ * @author 11227141 鍾博竣
+ * @author 11327229 游啓揚
+ * 
+ * @note 編譯與執行指令：
+ *       g++ -O3 -std=c++17 DS2HW5_11227141_11327229.cpp -o DS2HW5
+ */
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using namespace std;
+
+// 強制資料結構體以 1 位元組對齊，確保 Record 大小精確為 24 位元組 (10 + 10 + 4)，防止編譯器填充空白位元組
+#pragma pack(push, 1)
+struct Record {
+    char putID[10];  // 發訊學生的學號陣列
+    char getID[10];  // 收訊學生的學號陣列
+    float weight;    // 訊息量量化權重（主要排序鍵值，遞減排序）
+};
+#pragma pack(pop)
+
+// 主索引（Primary Index）項目結構，保存不重複的權重鍵值與檔案位址（0-based 筆數偏移量）
+struct IndexEntry {
+    float weight;      // 索引鍵值 (Key)
+    int recordOffset;  // 檔案內紀錄序號 (Offset)
+};
+
+/**
+ * @class ExternalSorter
+ * @brief 外部排序與索引管理類別
+ * 
+ * 封裝外部排序、檔案歸併、主索引建置等核心邏輯，避免全域變數污染，提高物件的模組化與可維護性。
+ */
+class ExternalSorter {
+private:
+    string fileNum;  // 目標檔案的編號（如 501，供建置pairs*.bin與order*.bin檔名使用）
+
+    /**
+     * @brief 生成臨時合併暫存檔（Run File）的名稱
+     * @param pass 當前合併階層（0 代表初始排序生成的子區塊）
+     * @param runIndex 當前階層的第幾個子區塊
+     * @return 臨時檔名字串
+     */
+    string getRunName(int pass, int runIndex) {
+        return "temp_pass_" + to_string(pass) + "_" + to_string(runIndex) + ".bin";
+    }
+
+    /**
+     * @brief 實作雙路歸併（2-Way Merge）演算法，兩兩合併局部排序檔
+     * 
+     * 本方法嚴格遵守記憶體配額限制，在合併過程中維持 300 筆 Record 的總快取上限：
+     *  - buffer1: 100 筆 (快取第一個輸入檔)
+     *  - buffer2: 100 筆 (快取第二個輸入檔)
+     *  - bufferOut: 100 筆 (快取寫出到輸出檔，滿 100 筆即進行一次實體磁碟寫入)
+     * 
+     * @param file1 第一個已排序的局部暫存檔路徑
+     * @param file2 第二個已排序的局部暫存檔路徑
+     * @param outFile 合併後的新暫存檔路徑
+     */
+    void mergeRuns(const string& file1, const string& file2, const string& outFile) {
+        ifstream f1(file1, ios::binary);
+        ifstream f2(file2, ios::binary);
+        ofstream fOut(outFile, ios::binary);
+
+        vector<Record> buffer1(100);
+        vector<Record> buffer2(100);
+        vector<Record> bufferOut(100);
+
+        int ptr1 = 0, count1 = 0;
+        int ptr2 = 0, count2 = 0;
+        int outCount = 0;
+
+        // Lambda 封裝：當快取一被消耗完時，自動從 file1 批次讀取至多 100 筆新資料
+        auto getRecord1 = [&]() -> Record* {
+            if (ptr1 >= count1) {
+                f1.read(reinterpret_cast<char*>(buffer1.data()), 100 * sizeof(Record));
+                count1 = f1.gcount() / sizeof(Record);
+                ptr1 = 0;
+            }
+            if (count1 == 0) return nullptr; // 檔案結束 (EOF)
+            return &buffer1[ptr1];
+        };
+
+        // Lambda 封裝：當快取二被消耗完時，自動從 file2 批次讀取至多 100 筆新資料
+        auto getRecord2 = [&]() -> Record* {
+            if (ptr2 >= count2) {
+                f2.read(reinterpret_cast<char*>(buffer2.data()), 100 * sizeof(Record));
+                count2 = f2.gcount() / sizeof(Record);
+                ptr2 = 0;
+            }
+            if (count2 == 0) return nullptr; // 檔案結束 (EOF)
+            return &buffer2[ptr2];
+        };
+
+        // Lambda 封裝：將單筆紀錄寫入輸出快取，滿 100 筆時一次性沖刷寫入磁碟，大幅減少 IO 次數
+        auto writeRecord = [&](const Record& rec) {
+            bufferOut[outCount++] = rec;
+            if (outCount == 100) {
+                fOut.write(reinterpret_cast<const char*>(bufferOut.data()), 100 * sizeof(Record));
+                outCount = 0;
+            }
+        };
+
+        Record* r1 = getRecord1();
+        Record* r2 = getRecord2();
+
+        // 雙指針線性歸併掃描
+        while (r1 != nullptr || r2 != nullptr) {
+            if (r1 != nullptr && r2 != nullptr) {
+                if (r1->weight > r2->weight) {
+                    writeRecord(*r1);
+                    ptr1++;
+                    r1 = getRecord1();
+                } else if (r1->weight < r2->weight) {
+                    writeRecord(*r2);
+                    ptr2++;
+                    r2 = getRecord2();
+                } else {
+                    // 【關鍵穩定排序控制】：當權重相等時，優先寫入來自第一個 Run 檔案的資料。
+                    // 由於第一個 Run 在原始檔案的位置較前，如此可確保 Stable Sort 的要求。
+                    writeRecord(*r1);
+                    ptr1++;
+                    r1 = getRecord1();
+                }
+            } else if (r1 != nullptr) {
+                writeRecord(*r1);
+                ptr1++;
+                r1 = getRecord1();
+            } else {
+                writeRecord(*r2);
+                ptr2++;
+                r2 = getRecord2();
+            }
+        }
+
+        // 將最後殘留於快取中不足 100 筆的剩餘資料沖刷寫入硬碟
+        if (outCount > 0) {
+            fOut.write(reinterpret_cast<const char*>(bufferOut.data()), outCount * sizeof(Record));
+        }
+
+        f1.close();
+        f2.close();
+        fOut.close();
+    }
+
+public:
+    /**
+     * @brief 建構管理器實例
+     * @param num 檔案編號 (例如 "501")
+     */
+    ExternalSorter(const string& num) : fileNum(num) {}
+
+    /**
+     * @brief 執行任務一：外部合併排序
+     * 
+     * 步驟：
+     * 1. 劃分初始排序區塊 (Internal Sort)：
+     *    - 每次以 300 筆為單位讀入 pairs*.bin。
+     *    - 呼叫 std::stable_sort 降序排序後，寫出為 Pass-0 的多個 temp_pass_0_*.bin。
+     * 2. 階段式歸併 (External Sort)：
+     *    - 兩兩合併相鄰的暫存檔，並在合併完成後立刻調用 std::remove 刪除舊檔案以維持硬碟整潔。
+     *    - 當遇上奇數檔案時，直接將該孤立暫存檔重命名移交至下一階段。
+     * 3. 輸出正式排序檔案 order*.bin 並回傳高精度計時。
+     * 
+     * @param[out] tInternal 內部局部排序產生成本 (毫秒)
+     * @param[out] tExternal 多 Pass 遞迴合併磁碟 I/O 成本 (毫秒)
+     * @return true 執行成功且檔案已生成
+     * @return false 原始 pairs*.bin 檔案不存在 (防呆阻斷)
+     */
+    bool executeSort(double& tInternal, double& tExternal) {
+        auto tStart = chrono::high_resolution_clock::now();
+        string inName = "pairs" + fileNum + ".bin";
+        ifstream inFile(inName, ios::binary);
+        if (!inFile.is_open()) return false;
+
+        int runIndex = 0;
+        vector<Record> memBuffer(300); // 內部排序記憶體預算限制：300 筆
+
+        // Step 1: 劃分初始區塊並寫出 initial sorted runs
+        while (true) {
+            inFile.read(reinterpret_cast<char*>(memBuffer.data()), 300 * sizeof(Record));
+            int countRead = inFile.gcount() / sizeof(Record);
+            if (countRead == 0) break;
+
+            // 僅對實際讀取到的範圍建立 activeBlock 進行排序，防止溢出或未填充數據參雜
+            vector<Record> activeBlock(memBuffer.begin(), memBuffer.begin() + countRead);
+            stable_sort(activeBlock.begin(), activeBlock.end(), [](const Record& a, const Record& b) {
+                return a.weight > b.weight;
+            });
+
+            string runName = getRunName(0, runIndex);
+            ofstream runFile(runName, ios::binary);
+            runFile.write(reinterpret_cast<const char*>(activeBlock.data()), countRead * sizeof(Record));
+            runFile.close();
+            runIndex++;
+        }
+        inFile.close();
+
+        auto tInternalEnd = chrono::high_resolution_clock::now();
+        cout << "\nThe internal sort is completed. Check the initial sorted runs! \n\n"
+             << "Now there are " << runIndex << " runs.\n\n";
+
+        // Step 2: 遞迴式 Pass-by-Pass 二路歸併
+        int currentPassRuns = runIndex;
+        int pass = 0;
+
+        while (currentPassRuns > 1) {
+            int nextPassRuns = 0;
+            for (int i = 0; i < currentPassRuns; i += 2) {
+                if (i + 1 < currentPassRuns) {
+                    string r1 = getRunName(pass, i);
+                    string r2 = getRunName(pass, i + 1);
+                    string rOut = getRunName(pass + 1, nextPassRuns);
+
+                    mergeRuns(r1, r2, rOut);
+                    std::remove(r1.c_str()); // 立即刪除已合併完畢的舊過渡暫存檔，保護硬碟空間
+                    std::remove(r2.c_str());
+                    nextPassRuns++;
+                } else {
+                    // 孤立未配對的單一暫存檔直接重新命名，升格移交至下一階段
+                    string r1 = getRunName(pass, i);
+                    string rOut = getRunName(pass + 1, nextPassRuns);
+                    std::rename(r1.c_str(), rOut.c_str());
+                    nextPassRuns++;
+                }
+            }
+            pass++;
+            currentPassRuns = nextPassRuns;
+            cout << "Now there are " << currentPassRuns << " runs.\n\n";
+        }
+
+        // Step 3: 將最後的單一歸併檔案重命名為 order*.bin，完成外部排序
+        string finalTempRun = getRunName(pass, 0);
+        string sortedOutName = "order" + fileNum + ".bin";
+        std::remove(sortedOutName.c_str()); // 防止舊有的殘留排序檔干擾重命名操作
+        std::rename(finalTempRun.c_str(), sortedOutName.c_str());
+
+        auto tExternalEnd = chrono::high_resolution_clock::now();
+        tInternal = chrono::duration<double, milli>(tInternalEnd - tStart).count();
+        tExternal = chrono::duration<double, milli>(tExternalEnd - tInternalEnd).count();
+        
+        return true;
+    }
+
+    /**
+     * @brief 任務二：讀取已排序檔案，建置記憶體主索引表並以指定格式輸出
+     * 
+     * 本方法分批掃描檔案，在發現權重邊界改變（或首筆資料）時，
+     * 向主索引表中添加 (weight, recordOffset) 對，隨後輸出至螢幕。
+     */
+    void buildPrimaryIndex() {
+        string sortedOutName = "order" + fileNum + ".bin";
+        ifstream f(sortedOutName, ios::binary);
+        if (!f.is_open()) return;
+
+        vector<IndexEntry> primaryIndex;
+        Record rec;
+        int recordIndex = 0;
+        float lastWeight = -1.0f;
+
+        // 循序遍歷整檔，擷取不重複權重的首筆資料序號
+        while (f.read(reinterpret_cast<char*>(&rec), sizeof(Record))) {
+            if (primaryIndex.empty() || rec.weight != lastWeight) {
+                primaryIndex.push_back({rec.weight, recordIndex});
+                lastWeight = rec.weight;
+            }
+            recordIndex++;
+        }
+        f.close();
+
+        // 精確匹配 DEMO 中的主索引輸出格式 (key, offset)
+        cout << "<Primary index>: (key, offset)\n";
+        for (size_t i = 0; i < primaryIndex.size(); ++i) {
+            cout << "[" << i + 1 << "] (" << primaryIndex[i].weight << ", " << primaryIndex[i].recordOffset << ")\n";
+        }
+    }
+};
+
+/**
+ * @brief 程式主流程控制
+ * 
+ * 實作使用者互動、防呆檔名檢查與接續/結束程式的控制邏輯。
+ */
+int main() {
+    while (true) {
+        // 印出標準首選單與參數配置
+        cout << "* Data Structures and Algorithms *\n"
+             << "**********************************\n"
+             << "* 1. External merge sort on file *\n"
+             << "* 2: Construct the primary index *\n"
+             << "**********************************\n"
+             << "*** The buffer size is 300\n";
+
+        // Mission 1 標頭只在進入此輪檔案處理時印出一次，不置於內層輸入防呆迴圈內
+        cout << "##################################\n"
+             << "Mission 1: External merge sort \n"
+             << "##################################\n\n";
+
+        string fileNum = "";
+        while (true) {
+            cout << "Input the file name: [0]Quit\n";
+
+            if (!getline(cin, fileNum)) {
+                fileNum = "0";
+                break;
+            }
+            // 過濾可能的跨平台 Windows 回車字元 (\r)
+            if (!fileNum.empty() && fileNum.back() == '\r') {
+                fileNum.pop_back();
+            }
+            if (fileNum == "0") {
+                break;
+            }
+
+            // 防呆驗證：嘗試唯讀開啟原始 pairs*.bin 檔案，若開啟失敗代表檔案不存在，觸發重試
+            string testName = "pairs" + fileNum + ".bin";
+            ifstream testFile(testName, ios::binary);
+            if (testFile.is_open()) {
+                testFile.close();
+                break; // 檔案存在，跳出防呆輸入迴圈
+            } else {
+                cout << "\npairs" << fileNum << ".bin does not exist!!!\n\n";
+            }
+        }
+
+        // 若使用者輸入 0 放棄執行，觸發退出詢問，符合測資答案的空行格式
+        if (fileNum == "0") {
+            cout << "\n[0]Quit or [Any other key]continue?\n";
+            string cont = "";
+            if (!getline(cin, cont)) {
+                break;
+            }
+            if (!cont.empty() && cont.back() == '\r') {
+                cont.pop_back();
+            }
+            if (cont == "0") {
+                break;
+            }
+            cout << "\n";
+            continue;
+        }
+
+        ExternalSorter sorter(fileNum);
+        double tInternal = 0.0, tExternal = 0.0;
+
+        // 執行排序與主索引建置
+        if (sorter.executeSort(tInternal, tExternal)) {
+            double tTotal = tInternal + tExternal;
+            
+            // 使用局部獨立的 stringstream 格式化執行時間（保留3位小數），防止污染 cout 的全域浮點輸出格式
+            stringstream ssInternal, ssExternal, ssTotal;
+            ssInternal << fixed << setprecision(3) << tInternal;
+            ssExternal << fixed << setprecision(3) << tExternal;
+            ssTotal << fixed << setprecision(3) << tTotal;
+
+            cout << "The execution time ...\n"
+                 << "Internal Sort = " << ssInternal.str() << " ms\n"
+                 << "External Sort = " << ssExternal.str() << " ms\n"
+                 << "Total Execution Time = " << ssTotal.str() << " ms\n\n"
+                 << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                 << "Mission 2: Build the primary index \n"
+                 << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n\n";
+
+            sorter.buildPrimaryIndex();
+        }
+
+        // 成功執行完兩大任務後，進行循環詢問（帶前導換行）
+        cout << "\n[0]Quit or [Any other key]continue?\n";
+        string action = "";
+        if (!getline(cin, action)) {
+            break;
+        }
+        if (!action.empty() && action.back() == '\r') {
+            action.pop_back();
+        }
+        if (action == "0") {
+            break;
+        }
+        cout << "\n";
+    }
+
+    return 0;
+}
