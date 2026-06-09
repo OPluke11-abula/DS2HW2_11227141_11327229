@@ -1,0 +1,12 @@
+# Input: initial buffer display (60000), change to 300, file 502, range 0.5/0.2, lookup 10327172, quit 4, quit 3, quit 0
+# Note: range input is entered as: first float after first prompt, second float after second prompt
+# The test input order: bufferSize_display(skip), new_buf=300, file=502, low=0.5, high=0.2, sid=10327172, sid_quit=4, range_quit=3, main_quit=0
+60000
+300
+502
+0.5
+0.2
+10327172
+4
+3
+0
